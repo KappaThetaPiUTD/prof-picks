@@ -1,0 +1,7 @@
+body { margin: 0; background: #f1f5f1; color: #1c3427; }
+.app-layout { max-width: 730px; margin: 30px auto; padding: 0 16px; }
+.app-heading { font: 13px Inter, 'Segoe UI', sans-serif; display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; color: #6a8274; }
+.app-logo { color: #154734; font-size: 22px; font-weight: 800; letter-spacing: -1px; }
+.app-logo span { color: #e87500; }
+footer { font: 11px Inter, Arial, sans-serif; color: #7c8c80; margin-top: 12px; text-align: center; }
+@media (max-width: 650px) { .app-layout { padding: 0; margin: 0; } .app-heading, footer { display: none; } }

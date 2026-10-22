@@ -1,7 +1,15 @@
+# Python environments
+.venv/
+.venv312/
+venv/
+__pycache__/
+*.pyc
+
+# Secret API keys
 .env
 .env.*
 !.env.example
-!.env.*.example
-.venv/
+
+# Frontend dependencies
 node_modules/
-__pycache__/
+dist/

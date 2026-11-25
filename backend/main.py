@@ -36,6 +36,11 @@ class ScheduleSection(BaseModel):
     course_code: str = Field(max_length=25)
     section_number: str = Field(max_length=25)
     meeting_times: str = Field(default="", max_length=300)
+    class_number: str = Field(default="", max_length=20)
+    professor: str = Field(default="", max_length=120)
+    meeting_days: list[str] = Field(default_factory=list, max_length=7)
+    start_time: str = Field(default="", max_length=12)
+    end_time: str = Field(default="", max_length=12)
 
 
 class ScheduleSnapshot(BaseModel):
@@ -53,6 +58,10 @@ class ChatRequest(BaseModel):
 class ChatReply(BaseModel):
     reply: str
     sources: list[str] = Field(default_factory=list)
+    # Sections mentioned in the reply, structured for "Add to schedule" cards.
+    sections: list[dict] = Field(default_factory=list)
+    # Changes Claude made to the schedule builder: {"action": "add", "section": {...}} or {"action": "remove", "class_number": "..."}
+    schedule_actions: list[dict] = Field(default_factory=list)
 
 
 SYSTEM_PROMPT = """You are ProfPicks, a concise academic planning assistant for UT Dallas students.
@@ -71,9 +80,15 @@ Choosing tools:
 - Catalog info (description, prerequisites) -> find_courses.
 - If the question names no course, ask for a course code (e.g. CS 1337). Answer general questions without tools. Do not repeat a lookup.
 
+Schedule builder (shown next to the chat):
+- The student's current schedule, if any, comes with their message as unverified data.
+- To build a schedule or add sections: call find_sections for every requested course in the same turn (pass their day/time/professor preferences as filters), pick one section per course with no time overlap with each other or the current schedule, then call update_schedule once with all the class numbers. To remove a section, call update_schedule with remove.
+- Only class numbers returned by find_sections in this turn can be added; look them up again if needed. If the student asks for easier grading, prefer professors with a higher avg GPA / % A.
+- After updating, do not repeat the schedule as a table: the calendar and section cards beside the chat already show it. Reply with one sentence on what you added, one short bullet per course on why that section (professor's avg GPA / % A, fit with preferences), and a line for any course that could not fit (with the closest alternative).
+
 Answer format (the chat renders Markdown):
 - Start with a 1-2 sentence direct answer to the exact question asked.
-- Then, if comparing, one compact table (at most 8 rows) with: Professor | Semesters | Students | Avg GPA | % A | % W. Sort by what the user asked about.
+- Then, if comparing, one compact table (at most 8 rows; the chat panel is narrow, so keep cells short) with: Professor | Semesters | Students | Avg GPA | % A | % W. Sort by what the user asked about.
 - End with at most two short bullets of caveats. No long disclaimers, no raw JSON, no lists of IDs.
 - Never mention tool or function names; describe what you can look up in plain words (e.g. "I can check current sections").
 - Section recommendations: lead with the best-matching section as "**CS 3345.002** (class #25101): Prof, Tue/Thu 1:00–2:15pm, room, term". Say why it fits (matches their preferences; one line on that professor's grade history). If nothing matched exactly, say so and offer the 1-3 closest alternatives. Close with how to sign up: add the class number in Orion during registration, and check seats on Coursebook first.
@@ -324,6 +339,9 @@ def format_section(s: dict, prefix: str, number: str, names: dict[str, str], now
         "time": f"{timed.get('start_time')}–{timed.get('end_time')}" if timed.get("start_time") else "Not listed",
         "location": f"{loc.get('building', '')} {loc.get('room', '')}".strip() or None,
         "mode": s.get("instruction_mode") or None,
+        "meeting_days": days,
+        "start_time": timed.get("start_time") or "",
+        "end_time": timed.get("end_time") or "",
         "_days_set": set(days),
         "_start_min": parse_clock(timed.get("start_time", "")),
     }
@@ -724,6 +742,54 @@ def build_question(request: ChatRequest) -> str:
     return question
 
 
+SCHEDULE_TOOL = {
+    "name": "update_schedule",
+    "description": "Add sections to, or remove them from, the student's schedule builder shown beside the chat. Add takes class numbers returned by find_sections in this turn. Returns what changed and any time conflicts.",
+    "input_schema": {"type": "object", "properties": {
+        "add": {"type": "array", "items": {"type": "string"}, "description": "Class numbers to add, e.g. [\"25101\"]"},
+        "remove": {"type": "array", "items": {"type": "string"}, "description": "Class numbers to remove"}}},
+}
+
+
+def section_card(section: dict, grade_history: dict) -> dict:
+    """Structured section for the frontend (cards and calendar blocks)."""
+    prof = section["professors"][0] if section.get("professors") else ""
+    stats = grade_history.get(prof) or {}
+    course, _, number = section["section"].rpartition(".")
+    return {
+        "course": course,
+        "section_number": number,
+        "section": section["section"],
+        "class_number": str(section.get("class_number") or ""),
+        "term": section.get("term"),
+        "professors": section.get("professors", []),
+        "meeting_days": section.get("meeting_days", []),
+        "start_time": section.get("start_time", ""),
+        "end_time": section.get("end_time", ""),
+        "days": section.get("days"),
+        "time": section.get("time"),
+        "location": section.get("location"),
+        "mode": section.get("mode"),
+        "avg_gpa": stats.get("avg_gpa"),
+        "pct_A": stats.get("pct_A"),
+    }
+
+
+def time_conflicts(cards: list[dict]) -> list[str]:
+    """Pairs of sections that meet on the same day at overlapping times."""
+    timed = []
+    for c in cards:
+        start, end = parse_clock(c.get("start_time", "")), parse_clock(c.get("end_time", ""))
+        if start is not None and end is not None and c.get("meeting_days"):
+            timed.append((c, set(c["meeting_days"]), start, end))
+    out = []
+    for i, (a, da, sa, ea) in enumerate(timed):
+        for b, db, sb, eb in timed[i + 1:]:
+            if da & db and sa < eb and sb < ea:
+                out.append(f"{a.get('section') or a.get('course')} overlaps {b.get('section') or b.get('course')}")
+    return out
+
+
 async def claude_generate(client: anthropic.AsyncAnthropic, messages: list, *, allow_tools: bool = True):
     """One Messages API call. Tools stay defined on every call (history contains
     tool_use blocks); the final call uses tool_choice 'none' plus a mid-conversation
@@ -734,7 +800,7 @@ async def claude_generate(client: anthropic.AsyncAnthropic, messages: list, *, a
         model=ANTHROPIC_MODEL,
         max_tokens=16000,
         system=SYSTEM_PROMPT,
-        tools=TOOLS,
+        tools=TOOLS + [SCHEDULE_TOOL],
         tool_choice={"type": "auto" if allow_tools else "none"},
         output_config={"effort": ANTHROPIC_EFFORT},
         cache_control={"type": "ephemeral"},
@@ -759,28 +825,61 @@ async def claude_chat(request: ChatRequest) -> ChatReply:
     messages.append({"role": "user", "content": build_question(request)})
     sources: set[str] = set()
     cache: dict[tuple[str, str], dict] = {}
+    seen_sections: dict[str, dict] = {}  # class number -> section card, from find_sections this turn
+    actions: list[dict] = []
+    current = [
+        {"section": f"{s.course_code}.{s.section_number}", "class_number": s.class_number,
+         "meeting_days": s.meeting_days, "start_time": s.start_time, "end_time": s.end_time}
+        for s in (request.active_schedule.sections if request.active_schedule else [])
+    ]
+
+    def apply_schedule_update(args: dict) -> dict:
+        nonlocal current
+        add = [str(x).strip() for x in (args.get("add") or []) if str(x).strip()][:10]
+        remove = [str(x).strip() for x in (args.get("remove") or []) if str(x).strip()][:10]
+        added, not_found = [], []
+        for cn in remove:
+            actions.append({"action": "remove", "class_number": cn})
+        current = [c for c in current if c.get("class_number") not in remove]
+        for cn in add:
+            card = seen_sections.get(cn)
+            if not card:
+                not_found.append(cn)
+                continue
+            if any(c.get("class_number") == cn for c in current):
+                continue
+            actions.append({"action": "add", "section": card})
+            current.append(card)
+            added.append(card["section"])
+        result = {"added": added, "removed": remove, "schedule_now": [c["section"] for c in current],
+                  "time_conflicts": time_conflicts(current)}
+        if not_found:
+            result["not_found"] = not_found
+            result["note"] = "These class numbers were not in this turn's find_sections results. Look them up first."
+        return result
+
+    def reply(text: str) -> ChatReply:
+        mentioned = [card for cn, card in seen_sections.items() if cn and cn in text]
+        return ChatReply(reply=text, sources=sorted(sources), sections=mentioned[:12], schedule_actions=actions)
 
     async def final_answer(client: anthropic.AsyncAnthropic) -> ChatReply:
         response = await claude_generate(client, messages, allow_tools=False)
         answer = claude_text(response)
         if response.stop_reason == "refusal" or not answer:
             answer = partial_answer(cache)
-        return ChatReply(reply=answer, sources=sorted(sources))
+        return reply(answer)
 
     try:
         async with anthropic.AsyncAnthropic() as client, httpx.AsyncClient() as http:
             for round_number in range(MAX_TOOL_ROUNDS):
                 response = await claude_generate(client, messages)
                 if response.stop_reason == "refusal":
-                    return ChatReply(
-                        reply="I can't help with that request. Try asking about a UTD course, e.g. 'grades for CS 1337'.",
-                        sources=sorted(sources),
-                    )
+                    return reply("I can't help with that request. Try asking about a UTD course, e.g. 'grades for CS 1337'.")
                 calls = [b for b in response.content if b.type == "tool_use"]
                 if not calls:
                     answer = claude_text(response)
                     if answer:
-                        return ChatReply(reply=answer, sources=sorted(sources))
+                        return reply(answer)
                     return await final_answer(client)
 
                 # Append the full assistant content unchanged (thinking + tool_use blocks).
@@ -789,6 +888,11 @@ async def claude_chat(request: ChatRequest) -> ChatReply:
                 fresh_lookups = 0
                 for call in calls:
                     args = call.input if isinstance(call.input, dict) else {}
+                    if call.name == "update_schedule":
+                        tool_results.append({"type": "tool_result", "tool_use_id": call.id,
+                                             "content": json.dumps(apply_schedule_update(args))})
+                        fresh_lookups += 1  # Progress, not a repeated lookup.
+                        continue
                     key = tool_cache_key(call.name, args)
                     if key in cache:
                         data = cache[key]  # No duplicate Nebula network request.
@@ -800,6 +904,11 @@ async def claude_chat(request: ChatRequest) -> ChatReply:
                         data = {"error": "Lookup limit reached. Answer using available Nebula results."}
                     if "source" in data:
                         sources.add(data["source"])
+                    if call.name == "find_sections":
+                        history = data.get("professor_grade_history_this_course") or {}
+                        for sec in data.get("results") or []:
+                            if sec.get("class_number"):
+                                seen_sections[str(sec["class_number"])] = section_card(sec, history)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": call.id,
@@ -825,7 +934,7 @@ async def claude_chat(request: ChatRequest) -> ChatReply:
     except anthropic.APIConnectionError:
         raise HTTPException(status_code=502, detail="Could not reach Claude. Check your connection.")
 
-    return ChatReply(reply=partial_answer(cache), sources=sorted(sources))
+    return reply(partial_answer(cache))
 
 
 @app.post("/api/chat", response_model=ChatReply)

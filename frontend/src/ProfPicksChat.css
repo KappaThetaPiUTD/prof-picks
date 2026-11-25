@@ -30,3 +30,15 @@
 .pp-chat__controls button { background: #e87500; color: #fff; border: 0; border-radius: 10px; padding: 10px 19px; font-weight: 700; cursor: pointer; }
 .pp-chat button:disabled { cursor: not-allowed; opacity: .55; }
 @media (max-width: 650px) { .pp-chat { height: 94dvh; min-height: 450px; border-radius: 0; } .pp-chat__readonly { display: none; } .pp-chat__bubble { max-width: 98%; } }
+.pp-chat__md { white-space: normal; }
+.pp-chat__md > :first-child { margin-top: 0; }
+.pp-chat__md > :last-child { margin-bottom: 0; }
+.pp-chat__md p { margin: 0 0 8px; }
+.pp-chat__md ul, .pp-chat__md ol { margin: 0 0 8px; padding-left: 20px; }
+.pp-chat__md li { margin: 2px 0; }
+.pp-chat__md h1, .pp-chat__md h2, .pp-chat__md h3 { font-size: 15px; margin: 10px 0 6px; }
+.pp-chat__md table { border-collapse: collapse; width: 100%; margin: 6px 0 10px; font-size: 12.5px; display: block; overflow-x: auto; }
+.pp-chat__md th, .pp-chat__md td { border: 1px solid #e1e9e4; padding: 5px 8px; text-align: left; white-space: nowrap; }
+.pp-chat__md th { background: #eef5f0; font-weight: 650; }
+.pp-chat__md tr:nth-child(even) td { background: #f8fbf9; }
+.pp-chat__md code { background: #eef5f0; padding: 1px 4px; border-radius: 4px; font-size: 12px; }

@@ -1,4 +1,6 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import './ProfPicksChat.css';
 
 export type ActiveSchedule = {
@@ -12,7 +14,7 @@ type ChatMessage = { role: 'user' | 'assistant'; content: string; error?: boolea
 const suggested = [
   'What can you tell me about MATH 2415?',
   'Find the sections for CS 1337',
-  'Compare historical grades for PHYS 2325',
+  'Which CS 1337 professor gives the most A\'s?',
 ];
 
 /** Drop this component into the left panel of the existing Figma Make React App.
@@ -82,7 +84,7 @@ export default function ProfPicksChat({ activeSchedule }: { activeSchedule?: Act
         <div className="pp-chat__welcome">
           <div className="pp-chat__sun" aria-hidden="true">☄️</div>
           <h3>Hey, Comet!</h3>
-          <p>Ask about UTD courses, sections, or historical grades. I’ll check Nebula instead of guessing. Claude-powered conversations can be enabled later.</p>
+          <p>Ask about UTD courses, sections, or historical grades. Ask which professor fits you best and I’ll compare their historical grades from Nebula.</p>
           {activeSchedule && <p className="pp-chat__schedule">Planning: {activeSchedule.name} · {activeSchedule.term}</p>}
           {messages.length === 0 && <div className="pp-chat__suggestions">
             {suggested.map(prompt => <button type="button" key={prompt} disabled={sending} onClick={() => void send(prompt)}>{prompt} ↗</button>)}
@@ -90,7 +92,9 @@ export default function ProfPicksChat({ activeSchedule }: { activeSchedule?: Act
         </div>
         {messages.map((msg, index) => <div key={index} className={`pp-chat__bubble pp-chat__bubble--${msg.role}${msg.error ? ' pp-chat__bubble--error' : ''}`}>
           <div className="pp-chat__speaker">{msg.role === 'assistant' ? 'ProfPicks' : 'You'}</div>
-          <div className="pp-chat__text">{msg.content}</div>
+          {msg.role === 'assistant' && !msg.error
+            ? <div className="pp-chat__text pp-chat__md"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></div>
+            : <div className="pp-chat__text">{msg.content}</div>}
           {!!msg.sources?.length && <div className="pp-chat__sources">Source: {msg.sources.join(' · ')}</div>}
         </div>)}
         {sending && <div className="pp-chat__thinking" role="status">Checking UTD data and preparing a response…</div>}
